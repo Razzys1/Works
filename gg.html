@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Iframe Search Engine</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, sans-serif;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    header {
+      padding: 8px 12px;
+      background: #111827;
+      color: #f9fafb;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    input[type="text"] {
+      flex: 1;
+      padding: 6px 8px;
+      border-radius: 4px;
+      border: 1px solid #4b5563;
+      background: #111827;
+      color: #f9fafb;
+    }
+    button {
+      padding: 6px 10px;
+      border-radius: 4px;
+      border: none;
+      background: #2563eb;
+      color: white;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #1d4ed8;
+    }
+    #results {
+      max-height: 180px;
+      overflow-y: auto;
+      border-bottom: 1px solid #e5e7eb;
+      padding: 8px 12px;
+      background: #f9fafb;
+      font-size: 14px;
+    }
+    #results a {
+      display: block;
+      color: #1d4ed8;
+      text-decoration: none;
+      margin-bottom: 4px;
+      word-break: break-all;
+    }
+    #results a:hover {
+      text-decoration: underline;
+    }
+    iframe {
+      flex: 1;
+      width: 100%;
+      border: none;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <span>Search:</span>
+    <input id="q" type="text" placeholder="Type a URL or search term..." />
+    <button id="go">Go</button>
+  </header>
+
+  <div id="results"></div>
+
+  <!-- The iframe that should always be used -->
+  <iframe id="view" src="about:blank"></iframe>
+
+  <script>
+    const input = document.getElementById('q');
+    const goBtn = document.getElementById('go');
+    const resultsDiv = document.getElementById('results');
+    const iframe = document.getElementById('view');
+
+    // Very simple "search": if it looks like a URL, use it; otherwise use a real search engine query URL
+    function buildUrl(query) {
+      const trimmed = query.trim();
+      if (!trimmed) return null;
+
+      // If it already looks like a URL with protocol
+      if (/^https?:\/\//i.test(trimmed)) {
+        return trimmed;
+      }
+
+      // If it looks like a bare domain
+      if (/^[\w.-]+\.[a-z]{2,}$/i.test(trimmed)) {
+        return 'https://' + trimmed;
+      }
+
+      // Otherwise, treat as search term (here using DuckDuckGo; you can swap to any engine)
+      const encoded = encodeURIComponent(trimmed);
+      return 'https://duckduckgo.com/?q=' + encoded;
+    }
+
+    function addResult(url) {
+      resultsDiv.innerHTML = '';
+      const link = document.createElement('a');
+      link.href = '#';
+      link.textContent = url;
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        iframe.src = url; // always load into iframe
+      });
+      resultsDiv.appendChild(link);
+      // auto-load first result
+      iframe.src = url;
+    }
+
+    function handleSearch() {
+      const url = buildUrl(input.value);
+      if (!url) return;
+      addResult(url);
+    }
+
+    goBtn.addEventListener('click', handleSearch);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') handleSearch();
+    });
+  </script>
+</body>
+</html>
