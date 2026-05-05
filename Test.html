@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Ninja Warrior Night</title>
+  <style>
+    body {
+      margin: 0;
+      background: #02030a;
+      color: #fff;
+      font-family: sans-serif;
+      overflow: hidden;
+    }
+    #ui {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 10;
+      background: rgba(0,0,0,0.5);
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+    }
+    #ui button {
+      margin: 2px;
+      font-size: 12px;
+    }
+    canvas {
+      display: block;
+      background: radial-gradient(circle at top, #0b1025 0%, #02030a 60%, #000000 100%);
+    }
+  </style>
+</head>
+<body>
+<div id="ui">
+  <div><strong>Controls</strong></div>
+  <div>Move: A / D or ← / →</div>
+  <div>Jump: W / ↑ / Space</div>
+  <div>Log Transform: Q</div>
+  <div>Ultimate Speed: E</div>
+  <div>Shuriken: F</div>
+  <div>Change Skin: 1–4</div>
+  <div>Scrolls: <span id="scrollCount">0</span> / 3</div>
+  <div>Level: <span id="levelNum">1</span> / 12</div>
+  <button id="nextLevelBtn">Next Level</button>
+</div>
+<canvas id="game"></canvas>
+
+<script>
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const scrollCountEl = document.getElementById('scrollCount');
+  const levelNumEl = document.getElementById('levelNum');
+  const nextLevelBtn = document.getElementById('nextLevelBtn');
+
+  function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Game state
+  let keys = {};
+  let gravity = 0.7;
+  let friction = 0.8;
+  let level = 1;
+  const maxLevels = 12;
+
+  // Player skins
+  const SKINS = [
+    { name: 'Sun', color: '#ffcc33', accent: '#ff3333' },   // red/yellow/gold
+    { name: 'King', color: '#33ff66', accent: '#0aff22' },  // green
+    { name: 'Normal', color: '#3399ff', accent: '#66ccff' },// blue
+    { name: 'SunAlt', color: '#ff9933', accent: '#ffdd55'}  // extra variant
+  ];
+  let currentSkinIndex = 2; // Normal blue by default
+
+  const player = {
+    x: 100,
+    y: 0,
+    w: 40,
+    h: 60,
+    vx: 0,
+    vy: 0,
+    onGround: false,
+    facing: 1,
+    isLog: false,
+    logTimer: 0,
+    speedBoost: false,
+    speedTimer: 0,
+    canThrow: true,
+    throwCooldown: 0
+  };
+
+  let platforms = [];
+  let enemies = [];
+  let scrolls = [];
+  let shurikens = [];
+
+  function createLevel(n) {
+    platforms = [];
+    enemies = [];
+    scrolls = [];
+    shurikens = [];
+    player.x = 100;
+    player.y = 0;
+    player.vx = 0;
+    player.vy = 0;
+
+    // Simple platform layout that changes slightly with level
+    const baseY = canvas.height - 80;
+    platforms.push({ x: 0, y: baseY, w: canvas.width, h: 80 });
+
+    // Floating platforms
+    for (let i = 0; i < 5; i++) {
+      const px = 200 + i * 200 + (n * 10) % 100;
+      const py = baseY - 150 - (i % 2) * 80;
+      platforms.push({ x: px, y: py, w: 120, h: 20 });
+    }
+
+    // Enemies
+    for (let i = 0; i < 4; i++) {
+      const ex = 300 + i * 250;
+      const ey = baseY - 40;
+      enemies.push({
+        x: ex,
+        y: ey,
+        w: 40,
+        h: 40,
+        vx: (i % 2 === 0 ? 1 : -1) * 1.2,
+        patrolMin: ex - 80,
+        patrolMax: ex + 80
+      });
+    }
+
+    // Hidden scrolls (place them on random platforms)
+    for (let i = 0; i < 3; i++) {
+      const p = platforms[1 + (i % (platforms.length - 1))];
+      const sx = p.x + 20 + (i * 40);
+      const sy = p.y - 30;
+      scrolls.push({ x: sx, y: sy, w: 20, h: 30, collected: false });
+    }
+
+    updateScrollUI();
+    levelNumEl.textContent = n;
+  }
+
+  function updateScrollUI() {
+    const collected = scrolls.filter(s => s.collected).length;
+    scrollCountEl.textContent = collected;
+  }
+
+  function rectsCollide(a, b) {
+    return (
+      a.x < b.x + b.w &&
+      a.x + a.w > b.x &&
+      a.y < b.y + b.h &&
+      a.y + a.h > b.y
+    );
+  }
+
+  // Input
+  window.addEventListener('keydown', e => {
+    keys[e.key.toLowerCase()] = true;
+
+    if (e.key === '1') currentSkinIndex = 0; // Sun
+    if (e.key === '2') currentSkinIndex = 1; // King
+    if (e.key === '3') currentSkinIndex = 2; // Normal
+    if (e.key === '4') currentSkinIndex = 3; // Alt
+
+    // Jump
+    if ((e.key === 'w' || e.key === 'ArrowUp' || e.key === ' ') && player.onGround) {
+      player.vy = -15;
+      player.onGround = false;
+    }
+
+    // Log transform
+    if (e.key.toLowerCase() === 'q' && !player.isLog) {
+      player.isLog = true;
+      player.logTimer = 60; // frames
+    }
+
+    // Ultimate speed
+    if (e.key.toLowerCase() === 'e' && !player.speedBoost) {
+      player.speedBoost = true;
+      player.speedTimer = 120; // frames
+    }
+
+    // Shuriken
+    if (e.key.toLowerCase() === 'f' && player.canThrow) {
+      throwShuriken();
+    }
+  });
+
+  window.addEventListener('keyup', e => {
+    keys[e.key.toLowerCase()] = false;
+  });
+
+  function throwShuriken() {
+    const dir = player.facing || 1;
+    shurikens.push({
+      x: player.x + player.w / 2,
+      y: player.y + player.h / 2,
+      r: 6,
+      vx: dir * 10,
+      vy: 0,
+      life: 90
+    });
+    player.canThrow = false;
+    player.throwCooldown = 30;
+  }
+
+  nextLevelBtn.addEventListener('click', () => {
+    level++;
+    if (level > maxLevels) level = 1;
+    createLevel(level);
+  });
+
+  // Game loop
+  function update() {
+    // Player movement
+    let moveSpeed = player.speedBoost ? 6 : 3;
+    if (keys['a'] || keys['arrowleft']) {
+      player.vx -= 0.8;
+      player.facing = -1;
+    }
+    if (keys['d'] || keys['arrowright']) {
+      player.vx += 0.8;
+      player.facing = 1;
+    }
+
+    player.vx *= friction;
+    player.vy += gravity;
+
+    player.x += player.vx;
+    player.y += player.vy;
+
+    // Boundaries
+    if (player.x < 0) player.x = 0;
+    if (player.x + player.w > canvas.width) player.x = canvas.width - player.w;
+    if (player.y > canvas.height) {
+      // Fell off: reset level
+      createLevel(level);
+    }
+
+    // Platform collisions
+    player.onGround = false;
+    for (const p of platforms) {
+      const future = {
+        x: player.x,
+        y: player.y,
+        w: player.w,
+        h: player.h
+      };
+      if (rectsCollide(future, p)) {
+        // Simple vertical resolution
+        if (player.vy > 0 && player.y + player.h - player.vy <= p.y) {
+          player.y = p.y - player.h;
+          player.vy = 0;
+          player.onGround = true;
+        } else if (player.vy < 0 && player.y - player.vy >= p.y + p.h) {
+          player.y = p.y + p.h;
+          player.vy = 0;
+        }
+      }
+    }
+
+    // Log transform timer
+    if (player.isLog) {
+      player.logTimer--;
+      if (player.logTimer <= 0) {
+        player.isLog = false;
+      }
+    }
+
+    // Speed boost timer
+    if (player.speedBoost) {
+      player.speedTimer--;
+      if (player.speedTimer <= 0) {
+        player.speedBoost = false;
+      }
+    }
+
+    // Throw cooldown
+    if (!player.canThrow) {
+      player.throwCooldown--;
+      if (player.throwCooldown <= 0) {
+        player.canThrow = true;
+      }
+    }
+
+    // Enemies patrol
+    for (const e of enemies) {
+      e.x += e.vx;
+      if (e.x < e.patrolMin || e.x + e.w > e.patrolMax) {
+        e.vx *= -1;
+      }
+    }
+
+    // Shurikens
+    for (const s of shurikens) {
+      s.x += s.vx;
+      s.y += s.vy;
+      s.life--;
+    }
+    shurikens = shurikens.filter(s => s.life > 0);
+
+    // Shuriken vs enemies
+    for (const s of shurikens) {
+      for (const e of enemies) {
+        if (!e.dead && rectsCollide(
+          { x: s.x - s.r, y: s.y - s.r, w: s.r * 2, h: s.r * 2 },
+          e
+        )) {
+          e.dead = true;
+          s.life = 0;
+        }
+      }
+    }
+    enemies = enemies.filter(e => !e.dead);
+
+    // Player vs enemies (if not log)
+    if (!player.isLog) {
+      for (const e of enemies) {
+        if (rectsCollide(player, e)) {
+          // Hit: reset level
+          createLevel(level);
+          break;
+        }
+      }
+    }
+
+    // Scroll collection
+    for (const sc of scrolls) {
+      if (!sc.collected && rectsCollide(player, sc)) {
+        sc.collected = true;
+        updateScrollUI();
+      }
+    }
+
+    draw();
+    requestAnimationFrame(update);
+  }
+
+  function drawBackground() {
+    // Night sky with moon and some lanterns
+    ctx.fillStyle = '#02030a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Moon
+    ctx.beginPath();
+    ctx.arc(canvas.width - 120, 100, 50, 0, Math.PI * 2);
+    ctx.fillStyle = '#f5f3c1';
+    ctx.fill();
+
+    // Lanterns (Chinese vibe)
+    for (let i = 0; i < 6; i++) {
+      const x = 80 + i * 200;
+      const y = 80 + (i % 2) * 40;
+      ctx.fillStyle = '#ff3b3b';
+      ctx.fillRect(x - 10, y, 20, 30);
+      ctx.fillStyle = '#ffdd66';
+      ctx.fillRect(x - 6, y + 5, 12, 20);
+      ctx.strokeStyle = '#ffaa33';
+      ctx.beginPath();
+      ctx.moveTo(x, y - 20);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+    }
+
+    // Silhouette mountains
+    ctx.fillStyle = '#050814';
+    ctx.beginPath();
+    ctx.moveTo(0, canvas.height - 200);
+    ctx.lineTo(200, canvas.height - 260);
+    ctx.lineTo(400, canvas.height - 210);
+    ctx.lineTo(650, canvas.height - 280);
+    ctx.lineTo(900, canvas.height - 230);
+    ctx.lineTo(canvas.width, canvas.height - 260);
+    ctx.lineTo(canvas.width, canvas.height);
+    ctx.lineTo(0, canvas.height);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawPlatforms() {
+    ctx.fillStyle = '#222833';
+    for (const p of platforms) {
+      ctx.fillRect(p.x, p.y, p.w, p.h);
+      ctx.strokeStyle = '#444b5a';
+      ctx.strokeRect(p.x, p.y, p.w, p.h);
+    }
+  }
+
+  function drawPlayer() {
+    const skin = SKINS[currentSkinIndex];
+
+    if (player.isLog) {
+      // Log form
+      ctx.fillStyle = '#8b5a2b';
+      ctx.fillRect(player.x, player.y + 10, player.w, player.h - 20);
+      ctx.strokeStyle = '#5a3a1a';
+      ctx.strokeRect(player.x, player.y + 10, player.w, player.h - 20);
+      return;
+    }
+
+    // Robe
+    ctx.fillStyle = skin.color;
+    ctx.fillRect(player.x, player.y + 20, player.w, player.h - 20);
+
+    // Head
+    ctx.fillStyle = skin.accent;
+    ctx.fillRect(player.x + 8, player.y, player.w - 16, 20);
+
+    // Straw hat (triangle)
+    ctx.fillStyle = '#d2b48c';
+    ctx.beginPath();
+    ctx.moveTo(player.x + player.w / 2, player.y - 12);
+    ctx.lineTo(player.x - 6, player.y + 4);
+    ctx.lineTo(player.x + player.w + 6, player.y + 4);
+    ctx.closePath();
+    ctx.fill();
+
+    // Simple belt
+    ctx.fillStyle = '#111';
+    ctx.fillRect(player.x, player.y + 40, player.w, 4);
+  }
+
+  function drawEnemies() {
+    for (const e of enemies) {
+      ctx.fillStyle = '#aa2222';
+      ctx.fillRect(e.x, e.y, e.w, e.h);
+      ctx.fillStyle = '#000';
+      ctx.fillRect(e.x + 8, e.y + 8, e.w - 16, 10);
+    }
+  }
+
+  function drawScrolls() {
+    for (const sc of scrolls) {
+      if (sc.collected) continue;
+      ctx.fillStyle = '#f5e6b3';
+      ctx.fillRect(sc.x, sc.y, sc.w, sc.h);
+      ctx.strokeStyle = '#c9a96a';
+      ctx.strokeRect(sc.x, sc.y, sc.w, sc.h);
+      ctx.fillStyle = '#aa3333';
+      ctx.fillRect(sc.x + 4, sc.y + 4, sc.w - 8, sc.h - 8);
+    }
+  }
+
+  function drawShurikens() {
+    ctx.strokeStyle = '#cccccc';
+    ctx.lineWidth = 2;
+    for (const s of shurikens) {
+      ctx.save();
+      ctx.translate(s.x, s.y);
+      const angle = (90 - s.life * 20) * Math.PI / 180;
+      ctx.rotate(angle);
+      ctx.beginPath();
+      ctx.moveTo(0, -s.r);
+      ctx.lineTo(0, s.r);
+      ctx.moveTo(-s.r, 0);
+      ctx.lineTo(s.r, 0);
+      ctx.stroke();
+      ctx.restore();
+    }
+    ctx.lineWidth = 1;
+  }
+
+  function draw() {
+    drawBackground();
+    drawPlatforms();
+    drawScrolls();
+    drawEnemies();
+    drawShurikens();
+    drawPlayer();
+  }
+
+  createLevel(level);
+  update();
+</script>
+</body>
+</html>
