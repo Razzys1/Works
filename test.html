@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>3D Driving Game</title>
+<style>
+  body { margin: 0; overflow: hidden; background: #111; }
+  #info {
+    position: absolute; top: 10px; left: 10px;
+    color: white; font-family: sans-serif;
+    background: rgba(0,0,0,0.5); padding: 10px;
+    border-radius: 5px; font-size: 14px;
+  }
+</style>
+</head>
+<body>
+<div id="info">
+  Arrow Keys / WASD = Drive<br>
+  1 = Restart<br>
+  Crash into buildings to break them
+</div>
+
+<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+
+<script>
+// --------------------------------------------------
+// BASIC SETUP
+// --------------------------------------------------
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+
+const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 2000);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+// --------------------------------------------------
+// LIGHTING
+// --------------------------------------------------
+scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+
+const sun = new THREE.DirectionalLight(0xffffff, 1);
+sun.position.set(100, 200, 100);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+scene.add(sun);
+
+// --------------------------------------------------
+// GROUND
+// --------------------------------------------------
+const groundGeo = new THREE.PlaneGeometry(600, 600);
+const groundMat = new THREE.MeshStandardMaterial({ color: 0x444444 });
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI/2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// --------------------------------------------------
+// BUILDINGS (BREAKABLE)
+// --------------------------------------------------
+let buildings = [];
+
+function createBuilding(x, z) {
+  const w = 10 + Math.random()*10;
+  const h = 20 + Math.random()*40;
+  const d = 10 + Math.random()*10;
+
+  const geo = new THREE.BoxGeometry(w, h, d);
+  const mat = new THREE.MeshStandardMaterial({ color: 0x666666 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(x, h/2, z);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+
+  mesh.userData = { breakable: true, w, h, d };
+  buildings.push(mesh);
+  scene.add(mesh);
+}
+
+// Fill the city
+for (let x = -250; x <= 250; x += 40) {
+  for (let z = -250; z <= 250; z += 40) {
+    if (Math.abs(x) < 40 && Math.abs(z) < 40) continue; // road area
+    createBuilding(x, z);
+  }
+}
+
+// --------------------------------------------------
+// BREAK BUILDINGS INTO PIECES
+// --------------------------------------------------
+function breakBuilding(building) {
+  const { w, h, d } = building.userData;
+
+  for (let i = 0; i < 10; i++) {
+    const pieceGeo = new THREE.BoxGeometry(w/4, h/6, d/4);
+    const pieceMat = new THREE.MeshStandardMaterial({ color: 0x777777 });
+    const piece = new THREE.Mesh(pieceGeo, pieceMat);
+
+    piece.position.copy(building.position);
+    piece.position.x += (Math.random()-0.5)*w;
+    piece.position.y += Math.random()*h;
+    piece.position.z += (Math.random()-0.5)*d;
+
+    piece.castShadow = true;
+    piece.receiveShadow = true;
+
+    scene.add(piece);
+
+    // Give pieces physics-like motion
+    piece.userData.vel = new THREE.Vector3(
+      (Math.random()-0.5)*0.8,
+      Math.random()*1.5,
+      (Math.random()-0.5)*0.8
+    );
+  }
+
+  scene.remove(building);
+}
+
+// --------------------------------------------------
+// CAR MODEL (FIXED ORIENTATION)
+// --------------------------------------------------
+const car = new THREE.Group();
+
+// Body
+const body = new THREE.Mesh(
+  new THREE.BoxGeometry(3, 1, 1.6),
+  new THREE.MeshStandardMaterial({ color: 0xff0000 })
+);
+body.castShadow = true;
+car.add(body);
+
+// Wheels
+function wheel() {
+  const w = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.4, 0.4, 0.3, 16),
+    new THREE.MeshStandardMaterial({ color: 0x111111 })
+  );
+  w.rotation.z = Math.PI/2;
+  w.castShadow = true;
+  return w;
+}
+
+const w1 = wheel(); w1.position.set(-1.2, -0.2, 0.8);
+const w2 = wheel(); w2.position.set( 1.2, -0.2, 0.8);
+const w3 = wheel(); w3.position.set(-1.2, -0.2,-0.8);
+const w4 = wheel(); w4.position.set( 1.2, -0.2,-0.8);
+
+car.add(w1, w2, w3, w4);
+
+car.position.set(0, 1, 0);
+scene.add(car);
+
+// --------------------------------------------------
+// CONTROLS
+// --------------------------------------------------
+const keys = {};
+onkeydown = e => keys[e.key] = true;
+onkeyup   = e => keys[e.key] = false;
+
+// Restart on "1"
+window.addEventListener("keydown", e => {
+  if (e.key === "1") location.reload();
+});
+
+// --------------------------------------------------
+// DRIVING PHYSICS
+// --------------------------------------------------
+let speed = 0;
+let steering = 0;
+
+function updateCar() {
+  const accel = 0.02;
+  const maxSpeed = 1.2;
+  const friction = 0.01;
+
+  if (keys["w"] || keys["ArrowUp"]) speed += accel;
+  if (keys["s"] || keys["ArrowDown"]) speed -= accel;
+
+  speed = THREE.MathUtils.clamp(speed, -maxSpeed, maxSpeed);
+
+  if (!keys["w"] && !keys["s"] && !keys["ArrowUp"] && !keys["ArrowDown"]) {
+    speed *= (1 - friction);
+  }
+
+  if (keys["a"] || keys["ArrowLeft"]) steering = 0.04;
+  else if (keys["d"] || keys["ArrowRight"]) steering = -0.04;
+  else steering = 0;
+
+  car.rotation.y += steering * (speed / maxSpeed);
+
+  const forward = new THREE.Vector3(0,0,1).applyQuaternion(car.quaternion);
+  car.position.addScaledVector(forward, speed);
+}
+
+// --------------------------------------------------
+// COLLISION CHECK
+// --------------------------------------------------
+function checkCollisions() {
+  for (let b of buildings) {
+    if (!b.parent) continue;
+
+    const dist = car.position.distanceTo(b.position);
+    if (dist < 4) {
+      breakBuilding(b);
+    }
+  }
+}
+
+// --------------------------------------------------
+// CAMERA FOLLOW
+// --------------------------------------------------
+function updateCamera() {
+  const offset = new THREE.Vector3(0, 6, 12);
+  const dir = new THREE.Vector3(0,0,1).applyQuaternion(car.quaternion);
+
+  const camPos = car.position.clone()
+    .addScaledVector(dir, -offset.z)
+    .add(new THREE.Vector3(0, offset.y, 0));
+
+  camera.position.lerp(camPos, 0.15);
+  camera.lookAt(car.position);
+}
+
+// --------------------------------------------------
+// ANIMATION LOOP
+// --------------------------------------------------
+function animate() {
+  requestAnimationFrame(animate);
+
+  updateCar();
+  updateCamera();
+  checkCollisions();
+
+  renderer.render(scene, camera);
+}
+
+animate();
+
+// Resize
+onresize = () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+};
+</script>
+</body>
+</html>
+
