@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>boom</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #202020; }
+    canvas { display: block; }
+    #info {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: white;
+      font-family: sans-serif;
+      background: rgba(0,0,0,0.4);
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+<div id="info">
+  W/S: accelerate & brake<br>
+  A/D: steer<br>
+  Simple 3D city driving demo
+</div>
+
+<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+
+<script>
+  // --- Basic setup ---
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x87ceeb); // sky-ish
+
+  const camera = new THREE.PerspectiveCamera(
+    60,
+    window.innerWidth / window.innerHeight,
+    0.1,
+    1000
+  );
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  document.body.appendChild(renderer.domElement);
+
+  // --- Lights ---
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+  scene.add(ambientLight);
+
+  const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+  dirLight.position.set(30, 50, -20);
+  dirLight.castShadow = true;
+  dirLight.shadow.mapSize.width = 2048;
+  dirLight.shadow.mapSize.height = 2048;
+  dirLight.shadow.camera.near = 1;
+  dirLight.shadow.camera.far = 200;
+  dirLight.shadow.camera.left = -80;
+  dirLight.shadow.camera.right = 80;
+  dirLight.shadow.camera.top = 80;
+  dirLight.shadow.camera.bottom = -80;
+  scene.add(dirLight);
+
+  // --- Ground / road (city base) ---
+  const groundGeo = new THREE.PlaneGeometry(200, 200);
+  const groundMat = new THREE.MeshStandardMaterial({ color: 0x404040 });
+  const ground = new THREE.Mesh(groundGeo, groundMat);
+  ground.rotation.x = -Math.PI / 2;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  // --- Simple city buildings ---
+  function addBuilding(x, z, w, h, d, color) {
+    const geo = new THREE.BoxGeometry(w, h, d);
+    const mat = new THREE.MeshStandardMaterial({ color });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(x, h / 2, z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+  }
+
+  // Create rows of buildings along a "road" in the middle
+  const roadWidth = 20;
+  for (let i = -80; i <= 80; i += 20) {
+    // left side
+    addBuilding(-40, i, 10, 15 + Math.random() * 25, 10, 0x888888);
+    addBuilding(-60, i + 10, 12, 20 + Math.random() * 20, 12, 0x666666);
+    // right side
+    addBuilding(40, i + 5, 10, 15 + Math.random() * 25, 10, 0x999999);
+    addBuilding(60, i - 5, 12, 20 + Math.random() * 20, 12, 0x555555);
+  }
+
+  // --- Road marking ---
+  const roadGeo = new THREE.PlaneGeometry(roadWidth, 200);
+  const roadMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
+  const road = new THREE.Mesh(roadGeo, roadMat);
+  road.rotation.x = -Math.PI / 2;
+  road.position.y = 0.01;
+  road.receiveShadow = true;
+  scene.add(road);
+
+  // --- Car model (not a cube) ---
+  const car = new THREE.Group();
+
+  // Car body
+  const bodyGeo = new THREE.BoxGeometry(3, 0.8, 1.6);
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0xff0000, metalness: 0.3, roughness: 0.4 });
+  const body = new THREE.Mesh(bodyGeo, bodyMat);
+  body.castShadow = true;
+  body.receiveShadow = true;
+  body.position.y = 0.8;
+  car.add(body);
+
+  // Car cabin (slightly slanted)
+  const cabinGeo = new THREE.BoxGeometry(1.8, 0.6, 1.4);
+  const cabinMat = new THREE.MeshStandardMaterial({ color: 0x990000, metalness: 0.2, roughness: 0.5 });
+  const cabin = new THREE.Mesh(cabinGeo, cabinMat);
+  cabin.position.set(0, 1.2, -0.1);
+  cabin.castShadow = true;
+  cabin.receiveShadow = true;
+  car.add(cabin);
+
+  // Wheels (cylinders)
+  function createWheel() {
+    const wheelGeo = new THREE.CylinderGeometry(0.35, 0.35, 0.3, 16);
+    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.9 });
+    const wheel = new THREE.Mesh(wheelGeo, wheelMat);
+    wheel.rotation.z = Math.PI / 2;
+    wheel.castShadow = true;
+    wheel.receiveShadow = true;
+    return wheel;
+  }
+
+  const wheelFL = createWheel();
+  wheelFL.position.set(-1.1, 0.45, 0.8);
+  const wheelFR = createWheel();
+  wheelFR.position.set(1.1, 0.45, 0.8);
+  const wheelRL = createWheel();
+  wheelRL.position.set(-1.1, 0.45, -0.8);
+  const wheelRR = createWheel();
+  wheelRR.position.set(1.1, 0.45, -0.8);
+
+  car.add(wheelFL, wheelFR, wheelRL, wheelRR);
+
+  car.position.set(0, 0, 0);
+  scene.add(car);
+
+  // --- Driving controls ---
+  const keys = {
+    w: false,
+    s: false,
+    a: false,
+    d: false
+  };
+
+  window.addEventListener('keydown', (e) => {
+    const k = e.key.toLowerCase();
+    if (keys.hasOwnProperty(k)) keys[k] = true;
+  });
+
+  window.addEventListener('keyup', (e) => {
+    const k = e.key.toLowerCase();
+    if (keys.hasOwnProperty(k)) keys[k] = false;
+  });
+
+  let speed = 0;
+  let steeringAngle = 0;
+  const maxSpeed = 0.6;
+  const accel = 0.01;
+  const brake = 0.02;
+  const friction = 0.005;
+  const maxSteer = 0.04; // radians per frame
+
+  // --- Camera follow ---
+  function updateCamera() {
+    const offset = new THREE.Vector3(0, 4, 8);
+    const carDir = new THREE.Vector3(0, 0, 1);
+    carDir.applyQuaternion(car.quaternion);
+    const camPos = car.position.clone()
+      .addScaledVector(carDir, -offset.z)
+      .add(new THREE.Vector3(0, offset.y, 0));
+
+    camera.position.lerp(camPos, 0.15);
+    camera.lookAt(car.position.clone().add(new THREE.Vector3(0, 1, 0)));
+  }
+
+  // --- Animation loop ---
+  function animate() {
+    requestAnimationFrame(animate);
+
+    // Acceleration / braking
+    if (keys.w) {
+      speed += accel;
+    } else if (keys.s) {
+      speed -= brake;
+    } else {
+      // natural friction
+      if (speed > 0) speed -= friction;
+      if (speed < 0) speed += friction;
+    }
+
+    // Clamp speed
+    speed = Math.max(-maxSpeed * 0.5, Math.min(maxSpeed, speed));
+
+    // Steering
+    if (keys.a) {
+      steeringAngle = maxSteer;
+    } else if (keys.d) {
+      steeringAngle = -maxSteer;
+    } else {
+      steeringAngle = 0;
+    }
+
+    // Rotate car based on steering and speed
+    car.rotation.y += steeringAngle * (speed / maxSpeed);
+
+    // Move car forward in its local Z direction
+    const forward = new THREE.Vector3(0, 0, 1);
+    forward.applyQuaternion(car.quaternion);
+    car.position.addScaledVector(forward, speed);
+
+    // Keep car on road area (optional clamp)
+    car.position.x = THREE.MathUtils.clamp(car.position.x, -roadWidth / 2 + 1, roadWidth / 2 - 1);
+
+    // Rotate wheels visually
+    const wheelRotationSpeed = speed * 5;
+    wheelFL.rotation.x += wheelRotationSpeed;
+    wheelFR.rotation.x += wheelRotationSpeed;
+    wheelRL.rotation.x += wheelRotationSpeed;
+    wheelRR.rotation.x += wheelRotationSpeed;
+
+    // Slight steering visual on front wheels
+    wheelFL.rotation.y = steeringAngle * 10;
+    wheelFR.rotation.y = steeringAngle * 10;
+
+    updateCamera();
+    renderer.render(scene, camera);
+  }
+
+  camera.position.set(0, 5, 10);
+  camera.lookAt(0, 0.5, 0);
+
+  animate();
+
+  // --- Resize handling ---
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+</script>
+</body>
+</html>
