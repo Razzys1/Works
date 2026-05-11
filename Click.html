@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Crypto GPU Clicker — Realistic Vertical Rig</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #05060a;
+      font-family: Arial, sans-serif;
+      color: #fff;
+    }
+    #ui {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 10;
+      background: rgba(0,0,0,0.7);
+      padding: 10px 14px;
+      border-radius: 8px;
+      min-width: 260px;
+      font-size: 14px;
+    }
+    #title {
+      font-size: 18px;
+      font-weight: bold;
+      margin-bottom: 6px;
+    }
+    .stat {
+      margin: 2px 0;
+    }
+    #upgradePanel, #boardPanel {
+      margin-top: 8px;
+      max-height: 200px;
+      overflow-y: auto;
+      border-top: 1px solid rgba(255,255,255,0.15);
+      padding-top: 6px;
+    }
+    .gpuRow, .boardRow {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 4px;
+      padding: 4px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .gpuInfo, .boardInfo {
+      max-width: 160px;
+    }
+    .gpuName, .boardName {
+      font-size: 13px;
+      font-weight: bold;
+    }
+    .gpuRate, .boardRate {
+      font-size: 11px;
+      opacity: 0.8;
+    }
+    .gpuBtn, .boardBtn {
+      padding: 3px 6px;
+      font-size: 11px;
+      border-radius: 4px;
+      border: none;
+      cursor: pointer;
+      background: #1e9bff;
+      color: #fff;
+    }
+    .gpuBtn:disabled, .boardBtn:disabled {
+      background: #555;
+      cursor: default;
+    }
+  </style>
+</head>
+<body>
+<div id="ui">
+  <div id="title">Crypto GPU Clicker — Vertical Rig</div>
+  <div class="stat">Balance: <span id="btc">0.00000000</span> BTC</div>
+  <div class="stat">Mining: <span id="bps">0.0000</span> BTC/s</div>
+  <div class="stat">Keypress Gain: +<span id="keyGain">0.00001</span> BTC</div>
+  <div class="stat">Boards: <span id="boardCount">1</span></div>
+
+  <h4>GPU Upgrades</h4>
+  <div id="upgradePanel"></div>
+
+  <h4>Board Upgrades</h4>
+  <div id="boardPanel"></div>
+</div>
+
+<canvas id="c"></canvas>
+
+<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+<script>
+/* ---------- helpers ---------- */
+function num(x) {
+  x = Number(x);
+  return Number.isFinite(x) ? x : 0;
+}
+
+/* ---------- game values ---------- */
+let btc = 0;
+let baseRate = 0.0001;
+let keyGain = 0.00001;
+let totalRate = baseRate;
+
+const gpuTiers = [
+  // name, rate, baseCost, visual params
+  { name: "GT 710",      rate: 0.0005, baseCost: 0.001,  length: 1.6, thickness: 0.12, fans: 1, color: 0x555555 },
+  { name: "GTX 750 Ti",  rate: 0.0015, baseCost: 0.004,  length: 1.9, thickness: 0.14, fans: 1, color: 0x444c66 },
+  { name: "GTX 960",     rate: 0.004,  baseCost: 0.012,  length: 2.1, thickness: 0.16, fans: 2, color: 0x3b4f5f },
+  { name: "GTX 1060",    rate: 0.05,   baseCost: 0.2,    length: 2.4, thickness: 0.18, fans: 2, color: 0x2f5f4f },
+  { name: "GTX 1080 Ti", rate: 0.25,   baseCost: 1.2,    length: 2.7, thickness: 0.2,  fans: 3, color: 0x2b3b4f },
+  { name: "RTX 2060",    rate: 0.4,    baseCost: 2.0,    length: 2.6, thickness: 0.2,  fans: 2, color: 0x2a4f3f },
+  { name: "RTX 3070",    rate: 7.0,    baseCost: 35.0,   length: 2.9, thickness: 0.22, fans: 2, color: 0x1f3f5f },
+  { name: "RTX 3080 Ti", rate: 16.0,   baseCost: 80.0,   length: 3.1, thickness: 0.24, fans: 3, color: 0x1b2f4f },
+  { name: "RTX 4090",    rate: 80.0,   baseCost: 420.0,  length: 3.4, thickness: 0.26, fans: 3, color: 0x111820 },
+  { name: "RTX 5080",    rate: 180.0,  baseCost: 900.0,  length: 3.6, thickness: 0.28, fans: 3, color: 0x202840 },
+  { name: "RTX 5080 Ti", rate: 260.0,  baseCost: 1400.0, length: 3.8, thickness: 0.3,  fans: 3, color: 0x181f3a }
+];
+
+const owned = new Array(gpuTiers.length).fill(0);
+
+/* ---------- boards ---------- */
+let boards = [];
+let boardCount = 1;
+
+const boardUpgrades = [
+  { name: "Add Board", cost: 0.002 },
+  { name: "Add Board", cost: 0.01 },
+  { name: "Add Board", cost: 0.05 },
+  { name: "Add Board", cost: 0.2 },
+  { name: "Add Board", cost: 1.0 },
+  { name: "Add Board", cost: 5.0 },
+  { name: "Add Board", cost: 20.0 }
+];
+
+/* ---------- UI ---------- */
+const btcSpan = document.getElementById("btc");
+const bpsSpan = document.getElementById("bps");
+const keyGainSpan = document.getElementById("keyGain");
+const boardCountSpan = document.getElementById("boardCount");
+const upgradePanel = document.getElementById("upgradePanel");
+const boardPanel = document.getElementById("boardPanel");
+
+function formatBTC(v) {
+  v = num(v);
+  if (v < 1) return v.toFixed(8);
+  if (v < 1000) return v.toFixed(4);
+  return v.toFixed(2);
+}
+
+function recalcRate() {
+  let r = baseRate;
+  for (let i = 0; i < gpuTiers.length; i++) {
+    r += num(gpuTiers[i].rate) * num(owned[i]);
+  }
+  totalRate = num(r);
+}
+
+function updateStats() {
+  btc = num(btc);
+  recalcRate();
+  btcSpan.textContent = formatBTC(btc);
+  bpsSpan.textContent = formatBTC(totalRate);
+  keyGainSpan.textContent = num(keyGain).toFixed(5);
+  boardCountSpan.textContent = boardCount;
+  updateButtons();
+}
+
+/* ---------- GPU shop ---------- */
+function getCost(i) {
+  const base = num(gpuTiers[i].baseCost);
+  const count = num(owned[i]);
+  return num(base * Math.pow(1.3, count));
+}
+
+function buyGPU(i) {
+  const cost = getCost(i);
+  if (btc >= cost) {
+    btc = num(btc - cost);
+    owned[i] = num(owned[i] + 1);
+    rebuildGPUMeshes();
+    updateStats();
+  }
+}
+
+function buildGPUShop() {
+  upgradePanel.innerHTML = "";
+  gpuTiers.forEach((gpu, i) => {
+    const row = document.createElement("div");
+    row.className = "gpuRow";
+    row.innerHTML = `
+      <div class="gpuInfo">
+        <div class="gpuName">${gpu.name}</div>
+        <div class="gpuRate">${num(gpu.rate).toFixed(4)} BTC/s</div>
+        <div class="gpuRate gpuOwned">x${owned[i]}</div>
+      </div>
+      <div>
+        <div class="gpuRate gpuCost">${formatBTC(gpu.baseCost)} BTC</div>
+        <button class="gpuBtn">Buy</button>
+      </div>
+    `;
+    row.querySelector("button").onclick = () => buyGPU(i);
+    upgradePanel.appendChild(row);
+  });
+}
+
+/* ---------- board shop ---------- */
+function buyBoard(i) {
+  const cost = num(boardUpgrades[i].cost);
+  if (btc >= cost) {
+    btc = num(btc - cost);
+    boardCount++;
+    addBoardMesh();
+    rebuildGPUMeshes();
+    updateStats();
+  }
+}
+
+function buildBoardShop() {
+  boardPanel.innerHTML = "";
+  boardUpgrades.forEach((b, i) => {
+    const row = document.createElement("div");
+    row.className = "boardRow";
+    row.innerHTML = `
+      <div class="boardInfo">
+        <div class="boardName">${b.name}</div>
+        <div class="boardRate">Cost: ${formatBTC(b.cost)} BTC</div>
+      </div>
+      <button class="boardBtn">Buy</button>
+    `;
+    row.querySelector("button").onclick = () => buyBoard(i);
+    boardPanel.appendChild(row);
+  });
+}
+
+/* ---------- button states ---------- */
+function updateButtons() {
+  const gpuRows = upgradePanel.querySelectorAll(".gpuRow");
+  gpuRows.forEach((row, i) => {
+    const cost = getCost(i);
+    const costEl = row.querySelector(".gpuCost");
+    const ownedEl = row.querySelector(".gpuOwned");
+    const btn = row.querySelector("button");
+    if (!costEl || !ownedEl || !btn) return;
+    costEl.textContent = formatBTC(cost) + " BTC";
+    ownedEl.textContent = "x" + owned[i];
+    btn.disabled = btc < cost;
+  });
+
+  const boardRows = boardPanel.querySelectorAll(".boardRow");
+  boardRows.forEach((row, i) => {
+    const cost = num(boardUpgrades[i].cost);
+    const rateEl = row.querySelector(".boardRate");
+    const btn = row.querySelector("button");
+    if (!rateEl || !btn) return;
+    rateEl.textContent = "Cost: " + formatBTC(cost) + " BTC";
+    btn.disabled = btc < cost;
+  });
+}
+
+/* ---------- three.js setup ---------- */
+const canvas = document.getElementById("c");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio || 1);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05060a);
+
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 200);
+camera.position.set(0, 8, 18);
+camera.lookAt(0, 2, 0);
+
+const ambient = new THREE.AmbientLight(0xffffff, 1.2);
+scene.add(ambient);
+
+const dirLight = new THREE.DirectionalLight(0xffffff, 2.0);
+dirLight.position.set(6, 10, 6);
+scene.add(dirLight);
+
+const fillLight = new THREE.PointLight(0x88ccff, 1.0, 40);
+fillLight.position.set(-6, 6, 4);
+scene.add(fillLight);
+
+function resizeRenderer() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener("resize", resizeRenderer);
+resizeRenderer();
+
+/* ---------- boards (vertical frames) ---------- */
+function addBoardMesh() {
+  const safeCount = Math.max(1, boardCount);
+  const scale = 1 / Math.sqrt(safeCount);
+
+  const frameWidth = 4 * scale;
+  const frameHeight = 4 * scale;
+  const frameDepth = 0.15 * scale;
+
+  const frameGeo = new THREE.BoxGeometry(frameWidth, frameHeight, frameDepth);
+  const frameMat = new THREE.MeshStandardMaterial({
+    color: 0x303848,
+    metalness: 0.7,
+    roughness: 0.3
+  });
+
+  const index = boards.length;
+  const cols = 4;
+  const row = Math.floor(index / cols);
+  const col = index % cols;
+
+  const board = new THREE.Mesh(frameGeo, frameMat);
+  board.position.set(
+    (col - (cols / 2 - 0.5)) * (5.5 * scale),
+    2 * scale,
+    row * (4.5 * scale)
+  );
+
+  scene.add(board);
+  boards.push(board);
+}
+
+addBoardMesh();
+
+/* ---------- GPU models (high-ish accuracy) ---------- */
+let gpuMeshes = [];
+
+function createGPUModel(tierIndex) {
+  const t = gpuTiers[tierIndex];
+  const length = t.length;
+  const height = 0.8;
+  const thickness = t.thickness;
+
+  const bodyGeo = new THREE.BoxGeometry(length, height, thickness);
+  const bodyMat = new THREE.MeshStandardMaterial({
+    color: t.color,
+    metalness: 0.8,
+    roughness: 0.35
+  });
+  const body = new THREE.Mesh(bodyGeo, bodyMat);
+
+  // backplate
+  const backGeo = new THREE.BoxGeometry(length * 0.98, height * 0.95, thickness * 0.4);
+  const backMat = new THREE.MeshStandardMaterial({
+    color: 0x111111,
+    metalness: 0.5,
+    roughness: 0.6
+  });
+  const back = new THREE.Mesh(backGeo, backMat);
+  back.position.z = -thickness * 0.35;
+  body.add(back);
+
+  // fans
+  const fanCount = t.fans;
+  const fanRadius = 0.25;
+  const fanGeo = new THREE.CylinderGeometry(fanRadius, fanRadius, 0.06, 24);
+  const fanMat = new THREE.MeshStandardMaterial({
+    color: 0x000000,
+    metalness: 0.4,
+    roughness: 0.4,
+    emissive: 0x111111,
+    emissiveIntensity: 0.4
+  });
+
+  for (let i = 0; i < fanCount; i++) {
+    const fan = new THREE.Mesh(fanGeo, fanMat);
+    fan.rotation.x = Math.PI / 2;
+    const xOffset = ((i - (fanCount - 1) / 2) * (length / fanCount)) * 0.7;
+    fan.position.set(xOffset, 0, thickness * 0.52);
+    body.add(fan);
+  }
+
+  // PCIe edge
+  const edgeGeo = new THREE.BoxGeometry(length * 0.9, 0.1, thickness * 0.2);
+  const edgeMat = new THREE.MeshStandardMaterial({
+    color: 0xd4af37,
+    metalness: 0.9,
+    roughness: 0.2
+  });
+  const edge = new THREE.Mesh(edgeGeo, edgeMat);
+  edge.position.set(0, -height * 0.55, 0);
+  body.add(edge);
+
+  // stand vertically
+  body.rotation.y = Math.PI / 2;
+  return body;
+}
+
+function clearGPUMeshes() {
+  gpuMeshes.forEach(m => scene.remove(m));
+  gpuMeshes = [];
+}
+
+function rebuildGPUMeshes() {
+  clearGPUMeshes();
+  if (boards.length === 0) return;
+
+  // flatten list of GPUs by type
+  const gpuList = [];
+  for (let i = 0; i < gpuTiers.length; i++) {
+    for (let c = 0; c < owned[i]; c++) {
+      gpuList.push(i);
+    }
+  }
+  if (gpuList.length === 0) return;
+
+  const perBoard = 6; // GPUs per board
+  const slotSpacingY = 0.9;
+  const slotSpacingX = 0.0;
+
+  gpuList.forEach((tierIndex, idx) => {
+    const boardIndex = Math.min(boards.length - 1, Math.floor(idx / perBoard));
+    const slotIndex = idx % perBoard;
+
+    const board = boards[boardIndex];
+    if (!board) return;
+
+    const gpu = createGPUModel(tierIndex);
+
+    const basePos = board.position.clone();
+    const yOffset = (slotIndex - (perBoard - 1) / 2) * slotSpacingY;
+    const xOffset = 0.0 + slotSpacingX;
+
+    gpu.position.set(
+      basePos.x + xOffset,
+      basePos.y + yOffset,
+      basePos.z + 0.15
+    );
+
+    scene.add(gpu);
+    gpuMeshes.push(gpu);
+  });
+}
+
+/* ---------- keyboard mining ---------- */
+window.addEventListener("keydown", () => {
+  btc = num(btc + keyGain);
+  updateStats();
+});
+
+/* ---------- game loop ---------- */
+let last = performance.now();
+
+function animate(now) {
+  requestAnimationFrame(animate);
+  const dt = num((now - last) / 1000);
+  last = now;
+
+  btc = num(btc + totalRate * dt);
+  updateStats();
+
+  // spin fans a bit
+  gpuMeshes.forEach(mesh => {
+    mesh.traverse(child => {
+      if (child.geometry && child.geometry.type === "CylinderGeometry") {
+        child.rotation.z += 10 * dt;
+      }
+    });
+  });
+
+  renderer.render(scene, camera);
+}
+
+/* ---------- init ---------- */
+buildGPUShop();
+buildBoardShop();
+rebuildGPUMeshes();
+updateStats();
+animate();
+</script>
+</body>
+</html>
